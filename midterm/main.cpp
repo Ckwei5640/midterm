@@ -12,11 +12,65 @@
 #include "mbed.h"
 #include "uLCD_4DGL.h"
 #include <string>
+#include <cmath>
 
 DA7212 audio;
 uLCD_4DGL uLCD(D1, D0, D2); // serial tx, serial rx, reset pin;
 int16_t waveform[kAudioTxBufferSize];
+InterruptIn sw3(SW3);
+InterruptIn sw2(SW2);
+EventQueue queue(32 * EVENTS_EVENT_SIZE);
+Thread t_play;
+Thread t_mode(osPriorityHigh);
+Thread t_DNN(osPriorityNormal, 120*1024/*120K stack size*/);
+int current_gesture;
+int song_select = 0;
+int current_song = 0;
+int mode_select = 0;
+int current_mode = 0;
 
+std::string name[2] = {"LittleStar", "Perfect"};
+std::string mode[3] = {"Forward", "Backward","Song Selection"};
+int song1[42] = {
+  261, 261, 392, 392, 440, 440, 392,
+  349, 349, 330, 330, 294, 294, 261,
+  392, 392, 349, 349, 330, 330, 294,
+  392, 392, 349, 349, 330, 330, 294,
+  261, 261, 392, 392, 440, 440, 392,
+  349, 349, 330, 330, 294, 294, 261};
+int noteLength1[42] = {
+  1, 1, 1, 1, 1, 1, 2,
+  1, 1, 1, 1, 1, 1, 2,
+  1, 1, 1, 1, 1, 1, 2,
+  1, 1, 1, 1, 1, 1, 2,
+  1, 1, 1, 1, 1, 1, 2,
+  1, 1, 1, 1, 1, 1, 2};
+int song2[47] = {
+  294, 330, 294, 261, 523, 494, 440,
+  494, 330, 392, 349, 330, 349, 330,
+  523, 494, 440, 494, 330, 392, 392,
+  392, 392, 440, 330, 294, 261, 261,
+  523, 494, 440, 494, 330, 392, 349,
+  330, 349, 330, 294, 349, 330, 330, 294, 294, 261, 247, 261};
+int noteLength2[47] = {
+  2, 1, 1, 2, 1, 1, 1,
+  1, 2, 1, 1, 1, 1, 1,
+  2, 1, 1, 1, 2, 1, 1,
+  1, 1, 1, 1, 1, 1, 1,
+  2, 1, 1, 1, 2, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 4};
+
+void playNote(int freq){
+  for (int i = 0; i < kAudioTxBufferSize; i++)
+  {
+    waveform[i] = (int16_t) (sin((double)i * 2. * M_PI/(double) (kAudioSampleFrequency / freq)) * ((1<<16) - 1));
+  }
+  // the loop below will play the note for the duration of 1s
+  for(int j = 0; j < kAudioSampleFrequency / kAudioTxBufferSize; ++j)
+  {
+    audio.spk.play(waveform, kAudioTxBufferSize);
+  }
+}
 
 // Return the result of the last prediction
 int PredictGesture(float* output) {
@@ -55,7 +109,8 @@ int PredictGesture(float* output) {
 
   return this_predict;
 }
-int main(int argc, char* argv[]) {
+
+void DNN(){
 
   // Create an area of memory to use for input, output, and intermediate arrays.
   // The size of this will depend on the model you're using, and may need to be
@@ -75,13 +130,13 @@ int main(int argc, char* argv[]) {
   // Map the model into a usable data structure. This doesn't involve any
   // copying or parsing, it's a very lightweight operation.
   const tflite::Model* model = tflite::GetModel(g_magic_wand_model_data);
-  if (model->version() != TFLITE_SCHEMA_VERSION) {
+  /*if (model->version() != TFLITE_SCHEMA_VERSION) {
     error_reporter->Report(
         "Model provided is schema version %d not equal "
         "to supported version %d.",
         model->version(), TFLITE_SCHEMA_VERSION);
     return -1;
-  }
+  }*/
   // Pull in only the operation implementations we need.
   // This relies on a complete list of all the ops needed by this graph.
   // An easier approach is to just use the AllOpsResolver, but this will
@@ -111,23 +166,23 @@ int main(int argc, char* argv[]) {
 
   // Obtain pointer to the model's input tensor
   TfLiteTensor* model_input = interpreter->input(0);
-  if ((model_input->dims->size != 4) || (model_input->dims->data[0] != 1) ||
+  /*if ((model_input->dims->size != 4) || (model_input->dims->data[0] != 1) ||
       (model_input->dims->data[1] != config.seq_length) ||
       (model_input->dims->data[2] != kChannelNumber) ||
       (model_input->type != kTfLiteFloat32)) {
     error_reporter->Report("Bad input tensor parameters in model");
     return -1;
-  }
+  }*/
   int input_length = model_input->bytes / sizeof(float);
 
   TfLiteStatus setup_status = SetupAccelerometer(error_reporter);
-  if (setup_status != kTfLiteOk) {
+  /*if (setup_status != kTfLiteOk) {
     error_reporter->Report("Set up failed\n");
     return -1;
-  }
+  }*/
   error_reporter->Report("Set up successful...\n");
 
-  while (true) {
+  while (100) {
     // Attempt to read new data from the accelerometer
     got_data = ReadAccelerometer(error_reporter, model_input->data.f,
                                  input_length, should_clear_buffer);
@@ -152,7 +207,104 @@ int main(int argc, char* argv[]) {
 
     // Produce an output
     if (gesture_index < label_num) {
-      error_reporter->Report(config.output_message[gesture_index]);
+      //error_reporter->Report(config.output_message[gesture_index]);
+      current_gesture = gesture_index;
     }
   }
+}
+
+void CanSwitch(){
+  mode_select = !mode_select;
+}
+
+void ModeSwitch(){
+  //uLCD.cls();
+  while(mode_select){
+    uLCD.printf("\nMode Selecting...\n");
+    if(current_gesture == 2){//waveleft
+      if(current_mode == 0) current_mode = 2;
+      else current_mode--;
+    }
+    if(current_gesture == 3){//waveright
+      if(current_mode == 2) current_mode = 0;
+      else current_mode++;
+    }
+    uLCD.printf("  %s\n",mode[current_mode].c_str());
+    sw2.fall(CanSwitch);
+  }
+}
+
+void SelectMode(){
+  song_select = !song_select;
+}
+
+void SongSwitch(){
+  while(song_select){
+    if(current_gesture == 2){//waveleft
+      if(current_song == 0) current_song = 0;
+      else current_song--;
+    }
+    if(current_gesture == 3){//waveright
+      if(current_song == 1) current_song = 1;
+      else current_song++;
+    }
+    sw3.fall(SelectMode);
+  }
+}
+
+void PlaySong(){
+  if(current_song == 0){
+      uLCD.printf("\nplaying...\n");
+      uLCD.printf("\n    %s \n",name[current_song].c_str());
+      for(int i = 0; i < 42; i++){
+          int length = noteLength1[i];
+          while(length--)
+          {
+            // the loop below will play the note for the duration of 1s
+            for(int j = 0; j < kAudioSampleFrequency / kAudioTxBufferSize; ++j)
+            {
+              queue.call(playNote, song1[i]);
+            }
+            if(length < 1) wait(0.5);
+          }
+          audio.spk.pause();
+        }
+      audio.spk.pause();
+    }
+    
+    if(current_song == 1){
+      uLCD.printf("\nplaying...\n");
+      uLCD.printf("\n    %s \n",name[current_song].c_str());
+      for(int i = 0; i < 47; i++){
+          int length = noteLength2[i];
+          while(length--)
+          {
+            // the loop below will play the note for the duration of 1s
+            for(int j = 0; j < kAudioSampleFrequency / kAudioTxBufferSize; ++j)
+            {
+              queue.call(playNote, song2[i]);
+            }
+            if(length < 1) wait(0.7);
+          }
+          audio.spk.pause();
+        }
+      audio.spk.pause();
+    }
+}
+
+int main() {
+    uLCD.cls();
+    uLCD.color(GREEN);
+    uLCD.printf("    Music\n      Player\n");
+
+    t_DNN.start(DNN);
+    t_mode.start(ModeSwitch);
+    t_play.start(callback(&queue, &EventQueue::dispatch_forever));
+
+    sw2.fall(CanSwitch);
+    sw3.fall(SelectMode);
+    queue.call(SongSwitch);
+    queue.call(PlaySong);
+
+    
 }
