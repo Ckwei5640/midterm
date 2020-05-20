@@ -19,46 +19,56 @@ uLCD_4DGL uLCD(D1, D0, D2); // serial tx, serial rx, reset pin;
 int16_t waveform[kAudioTxBufferSize];
 InterruptIn sw3(SW3);
 InterruptIn sw2(SW2);
+DigitalOut gled(LED2);
+Serial pc(USBTX, USBRX);
 EventQueue queue(32 * EVENTS_EVENT_SIZE);
+EventQueue gqueue(32 * EVENTS_EVENT_SIZE);
+EventQueue mqueue(32 * EVENTS_EVENT_SIZE);
 Thread t_play;
+Thread t_game;
 Thread t_mode(osPriorityHigh);
-Thread t_DNN(osPriorityNormal, 120*1024/*120K stack size*/);
-int current_gesture;
-int song_select = 0;
+Thread t_DNN(osPriorityNormal, 100*1024/*120K stack size*/);
+int current_gesture = -1;
+int song_select = 1;
 int current_song = 0;
-int mode_select = 0;
+int mode_select = 1;
 int current_mode = 0;
+char buff;
+int j;
+int song = 2;
 
-std::string name[2] = {"LittleStar", "Perfect"};
-std::string mode[3] = {"Forward", "Backward","Song Selection"};
-int song1[42] = {
+std::string name[3] = {"LittleStar", "Perfect", ""};
+std::string mode[5] = {"Forward", "Backward","Song Selection","Add Song","Taiko"};
+int song1[43] = {
   261, 261, 392, 392, 440, 440, 392,
   349, 349, 330, 330, 294, 294, 261,
   392, 392, 349, 349, 330, 330, 294,
   392, 392, 349, 349, 330, 330, 294,
   261, 261, 392, 392, 440, 440, 392,
-  349, 349, 330, 330, 294, 294, 261};
-int noteLength1[42] = {
+  349, 349, 330, 330, 294, 294, 261, 0};
+int noteLength1[43] = {
   1, 1, 1, 1, 1, 1, 2,
   1, 1, 1, 1, 1, 1, 2,
   1, 1, 1, 1, 1, 1, 2,
   1, 1, 1, 1, 1, 1, 2,
   1, 1, 1, 1, 1, 1, 2,
-  1, 1, 1, 1, 1, 1, 2};
-int song2[47] = {
+  1, 1, 1, 1, 1, 1, 2, 1};
+int song2[48] = {
   294, 330, 294, 261, 523, 494, 440,
   494, 330, 392, 349, 330, 349, 330,
   523, 494, 440, 494, 330, 392, 392,
   392, 392, 440, 330, 294, 261, 261,
   523, 494, 440, 494, 330, 392, 349,
-  330, 349, 330, 294, 349, 330, 330, 294, 294, 261, 247, 261};
-int noteLength2[47] = {
+  330, 349, 330, 294, 349, 330, 330, 294, 294, 261, 247, 261, 0};
+int noteLength2[48] = {
   2, 1, 1, 2, 1, 1, 1,
   1, 2, 1, 1, 1, 1, 1,
   2, 1, 1, 1, 2, 1, 1,
   1, 1, 1, 1, 1, 1, 1,
   2, 1, 1, 1, 2, 1, 1,
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 4};
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 4, 1};
+int song3[62];
+int noteLength3[62];
 
 void playNote(int freq){
   for (int i = 0; i < kAudioTxBufferSize; i++)
@@ -213,59 +223,84 @@ void DNN(){
   }
 }
 
-void CanSwitch(){
+void CanSwitch(){ //switch mode
   mode_select = !mode_select;
 }
 
 void ModeSwitch(){
-  //uLCD.cls();
-  while(mode_select){
-    uLCD.printf("\nMode Selecting...\n");
+  uLCD.cls();
+  uLCD.printf("\nMode Selecting...\n");
+  while(1){
+    wait(0.01);
+    if(mode_select == 0) break;
     if(current_gesture == 2){//waveleft
-      if(current_mode == 0) current_mode = 2;
+      if(current_mode == 0) current_mode = 4;
       else current_mode--;
+      current_gesture = -1;
+      uLCD.printf("  %s\n",mode[current_mode].c_str());
     }
     if(current_gesture == 3){//waveright
-      if(current_mode == 2) current_mode = 0;
+      if(current_mode == 4) current_mode = 0;
       else current_mode++;
+      current_gesture = -1;
+      uLCD.printf("  %s\n",mode[current_mode].c_str());
     }
-    uLCD.printf("  %s\n",mode[current_mode].c_str());
-    sw2.fall(CanSwitch);
+    //sw2.fall(CanSwitch);
   }
+
 }
 
-void SelectMode(){
+void SelectMode(){ //mode song selection
   song_select = !song_select;
 }
 
 void SongSwitch(){
-  while(song_select){
+  uLCD.cls();
+  uLCD.printf("\nSong Selecting...\n");
+  while(1){
+    wait(0.01);
     if(current_gesture == 2){//waveleft
       if(current_song == 0) current_song = 0;
       else current_song--;
+      current_gesture = -1;
+      uLCD.printf("  %s\n",name[current_song].c_str());
     }
     if(current_gesture == 3){//waveright
-      if(current_song == 1) current_song = 1;
+      if(current_song == song) current_song = song;
       else current_song++;
+      current_gesture = -1;
+      uLCD.printf("  %s\n",name[current_song].c_str());
     }
-    sw3.fall(SelectMode);
+    if(song_select == 0) break;
+    //sw3.fall(SelectMode);
   }
 }
 
+void StopMusic(){
+  audio.spk.pause();
+  //waveform = (int16_t)0;
+  uLCD.cls();
+  uLCD.filled_rectangle(32,32,96,96,WHITE);
+  wait(1);
+}
+
 void PlaySong(){
-  if(current_song == 0){
-      uLCD.printf("\nplaying...\n");
-      uLCD.printf("\n    %s \n",name[current_song].c_str());
-      for(int i = 0; i < 42; i++){
+    if(current_song == 0){
+      //uLCD.printf("\nplaying123\n");
+      //uLCD.printf("\n    %s \n",name[current_song].c_str());
+      for(int i = 0; i < 43; i++){
           int length = noteLength1[i];
           while(length--)
           {
             // the loop below will play the note for the duration of 1s
             for(int j = 0; j < kAudioSampleFrequency / kAudioTxBufferSize; ++j)
             {
+              if(current_gesture == 0) {
+                StopMusic();
+              }
               queue.call(playNote, song1[i]);
             }
-            if(length < 1) wait(0.5);
+            if(length < 1) wait(0.9);
           }
           audio.spk.pause();
         }
@@ -273,15 +308,18 @@ void PlaySong(){
     }
     
     if(current_song == 1){
-      uLCD.printf("\nplaying...\n");
-      uLCD.printf("\n    %s \n",name[current_song].c_str());
-      for(int i = 0; i < 47; i++){
+      //uLCD.printf("\nplaying...\n");
+      //uLCD.printf("\n    %s \n",name[current_song].c_str());
+      for(int i = 0; i < 48; i++){
           int length = noteLength2[i];
           while(length--)
           {
             // the loop below will play the note for the duration of 1s
             for(int j = 0; j < kAudioSampleFrequency / kAudioTxBufferSize; ++j)
             {
+              if(current_gesture == 0) {
+                StopMusic();
+              }
               queue.call(playNote, song2[i]);
             }
             if(length < 1) wait(0.7);
@@ -290,21 +328,157 @@ void PlaySong(){
         }
       audio.spk.pause();
     }
+    if(current_song == 2){
+      //uLCD.printf("\nplaying...\n");
+      //uLCD.printf("\n    %s \n",name[current_song].c_str());
+      for(int i = 0; i < 62; i++){
+          int length = noteLength3[i];
+          while(length--)
+          {
+            // the loop below will play the note for the duration of 1s
+            for(int j = 0; j < kAudioSampleFrequency / kAudioTxBufferSize; ++j)
+            {
+              if(current_gesture == 0) {
+                StopMusic();
+              }
+              queue.call(playNote, song3[i]);
+            }
+            if(length < 1) wait(0.5);
+          }
+          audio.spk.pause();
+        }
+      audio.spk.pause();
+    }
+}
+
+void AddSong(){
+  uLCD.cls();
+  uLCD.printf("\nAdding Song...\n");
+  gled = 0;
+  while(1){
+    if(pc.readable()){
+      buff = pc.getc();
+      if(buff == '\n') break;
+      else name[2] = name[2] + buff;
+    }
+  }
+
+  for(int i = 0; i < 62; i++){
+    j = 2;
+    while(1){
+      if(pc.readable()){
+        buff = pc.getc();
+        if(buff == '\n') break;
+        else{
+          song3[i] = song3[i] + pow(10,j)*(buff - 48);
+          j--;
+        }
+      }
+    }
+  }
+
+  for(int i = 0; i < 62; i++){
+    while(1){
+      if(pc.readable()){
+        buff = pc.getc();
+        if(buff == '\n') break;
+        else noteLength3[i] = buff - 48;
+      }
+    }
+  }
+
+  gled = 1;
+  uLCD.printf("  %s\n",name[2].c_str());
+  song++;
+  wait(1);
+}
+
+void Taiko(){
+  int score = 0;
+  //current_song = 0;
+  for(int i = 0;i < 42;i++){
+    uLCD.cls();
+    uLCD.printf("Score:%d",score);
+    if(noteLength1[i] != 1) uLCD.filled_circle(64, 64, 20, BLUE);
+    else uLCD.filled_circle(64, 64, 15, RED);
+    if((noteLength1[i] == 1 && current_gesture == 2) || (noteLength1[i] != 1 && current_gesture == 3)){
+      score++;
+      current_gesture = -1;
+    }
+    wait(0.7);
+  }
+  uLCD.cls();
+  uLCD.text_width(2);
+  uLCD.text_height(2);
+  uLCD.printf("\n\n\nScore:%d",score);
 }
 
 int main() {
     uLCD.cls();
     uLCD.color(GREEN);
-    uLCD.printf("    Music\n      Player\n");
+    uLCD.text_width(2);
+    uLCD.text_height(2);
+    uLCD.printf("\n\n\nMusic\n  Player\n");
+    uLCD.text_width(1);
+    uLCD.text_height(1);
+    uLCD.color(RED);
+    uLCD.printf("&TAIKO");
+    wait(4);
+    uLCD.color(GREEN);
+    gled = 1;
 
     t_DNN.start(DNN);
-    t_mode.start(ModeSwitch);
-    t_play.start(callback(&queue, &EventQueue::dispatch_forever));
-
-    sw2.fall(CanSwitch);
-    sw3.fall(SelectMode);
-    queue.call(SongSwitch);
-    queue.call(PlaySong);
-
+    while(1){
+      t_mode.start(callback(&mqueue, &EventQueue::dispatch_forever));
+      t_play.start(callback(&queue, &EventQueue::dispatch_forever));
+      t_game.start(callback(&gqueue, &EventQueue::dispatch_forever));
     
+      sw2.fall(CanSwitch);
+      sw3.fall(SelectMode);
+      mqueue.call(ModeSwitch);
+      while(mode_select){
+        wait(0.01);
+      }
+      //uLCD.cls();
+      if(current_mode == 3 && mode_select == 0) AddSong();
+      if(current_mode == 0 && mode_select == 0){
+        current_song = 0;
+        for(int i = current_song;i < song;i++){
+          uLCD.cls();
+          uLCD.printf("\nplaying...\n");
+          uLCD.printf("\n    %s \n",name[current_song].c_str());
+          PlaySong();
+          current_song++;
+        }
+      }
+      if(current_mode == 1 && mode_select == 0){
+        current_song = song-1;
+        for(int i = current_song;i >= 0;i--){
+          uLCD.cls();
+          uLCD.printf("\nplaying...\n");
+          uLCD.printf("\n    %s \n",name[current_song].c_str());
+          PlaySong();
+          current_song--;
+        }
+      }
+      if(current_mode == 4 && mode_select == 0){
+        current_song = 0;
+        gqueue.call(Taiko);
+        PlaySong();
+      }
+      if(current_mode == 2 && mode_select == 0) queue.call(SongSwitch);
+      while(song_select){
+        wait(0.01);
+      }
+      if(current_mode == 2 && mode_select == 0){
+          uLCD.cls();
+          uLCD.printf("\nplaying...\n");
+          uLCD.printf("\n    %s \n",name[current_song].c_str());
+          PlaySong();
+      }
+      mode_select = 1;
+      song_select = 1;
+    }
+    
+
 }
